@@ -60,14 +60,10 @@ jobs:
 - **Push to `dev` branch**: Pushes `image:dev`.
 - **Push to any other branch**: Pushes `image:<branch-name>`.
 
-## ✅ Implementation Checklist for your FastAPI App
+## ✅ Implementation Checklist
 
-Since you are on Windows, remember:
-
-- **No Local Gunicorn**: Keep Gunicorn out of your local environment; the Dockerfile handles it for the Linux container.
-- **FastAPI Entrypoint**: Ensure your Dockerfile uses `main:app` (or your specific filename/instance).
 - **Docker Hub PAT**: Don't use your Docker Hub password; generate a Token in Docker Hub Account Settings for better security.
 
 ---
 
-Would you like me to create a GitHub Action for linting (Ruff/Pytest) that runs before this Docker build to ensure your code is bug-free?
+ > Thanks for using this reusable workflow! If you have any questions or need further assistance, feel free to open an issue or contribute to the repository. Happy coding! 🚀
