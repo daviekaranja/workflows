@@ -1,0 +1,70 @@
+name: Reusable VPS Deploy
+
+on:
+  workflow_call:
+    inputs:
+      target_directory:
+        required: true
+        type: string
+        description: "Path on the VPS where docker-compose.yml lives"
+      image_tag:
+        required: true
+        type: string
+        description: "The Docker image tag to deploy (e.g. v1.0.1 or latest)"
+      env_variable_name:
+        required: false
+        type: string
+        default: "IMAGE_TAG"
+        description: "The variable name in the .env file to update"
+    secrets:
+      VPS_HOST:
+        required: true
+      VPS_USERNAME:
+        required: true
+      VPS_SSH_KEY:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Execute Remote SSH Commands
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd ${{ inputs.target_directory }}
+            
+            # 1. Update the .env file with the new tag
+            # Uses sed to find the line starting with the variable and replace its value
+            sed -i "s|^${{ inputs.env_variable_name }}=.*|${{ inputs.env_variable_name }}=${{ inputs.image_tag }}|" .env
+            
+            # 2. Pull the new image
+            docker compose pull
+            
+            # 3. Start the container (re-creates only if changed)
+            docker compose up -d
+            
+            # 4. Healthcheck Wait
+            echo "Waiting for service to be healthy..."
+            # Adjust the timeout (30s) as needed for your app boot time
+            TIMEOUT=30
+            while [ $TIMEOUT -gt 0 ]; do
+              if [ "$(docker compose ps --format json | grep -c '"Health":"healthy"')" -ge 1 ]; then
+                echo "Deployment Healthy!"
+                exit 0
+              fi
+              sleep 2
+              ((TIMEOUT-=2))
+            done
+            
+            echo "Healthcheck failed or timed out!"
+            exit 1
+
+      - name: Notification
+        if: always()
+        run: |
+          echo "Deployment of ${{ inputs.image_tag }} finished with status: ${{ job.status }}"
+          # You can add a Slack/Discord webhook step here
