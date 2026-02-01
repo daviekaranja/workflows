@@ -1,3 +1,75 @@
+# name: Reusable VPS Deploy
+
+# on:
+#   workflow_call:
+#     inputs:
+#       target_directory:
+#         required: true
+#         type: string
+#         description: "Path on the VPS where docker-compose.yml lives"
+#       image_tag:
+#         required: true
+#         type: string
+#         description: "The Docker image tag to deploy (e.g. v1.0.1 or latest)"
+#       env_variable_name:
+#         required: false
+#         type: string
+#         default: "IMAGE_TAG"
+#         description: "The variable name in the .env file to update"
+#     secrets:
+#       VPS_HOST:
+#         required: true
+#       VPS_USERNAME:
+#         required: true
+#       VPS_SSH_KEY:
+#         required: true
+
+# jobs:
+#   deploy:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Execute Remote SSH Commands
+#         uses: appleboy/ssh-action@v1.0.3
+#         with:
+#           host: ${{ secrets.VPS_HOST }}
+#           username: ${{ secrets.VPS_USERNAME }}
+#           key: ${{ secrets.VPS_SSH_KEY }}
+#           script: |
+#             cd ${{ inputs.target_directory }}
+            
+#             # 1. Update the .env file with the new tag
+#             # Uses sed to find the line starting with the variable and replace its value
+#             sed -i "s|^${{ inputs.env_variable_name }}=.*|${{ inputs.env_variable_name }}=${{ inputs.image_tag }}|" .env
+            
+#             # 2. Pull the new image
+#             docker compose pull
+            
+#             # 3. Start the container (re-creates only if changed)
+#             docker compose up -d
+            
+#             # 4. Healthcheck Wait
+#             echo "Waiting for service to be healthy..."
+#             # Adjust the timeout (30s) as needed for your app boot time
+#             TIMEOUT=30
+#             while [ $TIMEOUT -gt 0 ]; do
+#               if [ "$(docker compose ps --format json | grep -c '"Health":"healthy"')" -ge 1 ]; then
+#                 echo "Deployment Healthy!"
+#                 exit 0
+#               fi
+#               sleep 2
+#               ((TIMEOUT-=2))
+#             done
+            
+#             echo "Healthcheck failed or timed out!"
+#             exit 1
+
+#       - name: Notification
+#         if: always()
+#         run: |
+#           echo "Deployment of ${{ inputs.image_tag }} finished with status: ${{ job.status }}"
+#           # You can add a Slack/Discord webhook step here
+
+
 name: Reusable VPS Deploy
 
 on:
@@ -10,7 +82,7 @@ on:
       image_tag:
         required: true
         type: string
-        description: "The Docker image tag to deploy (e.g. v1.0.1 or latest)"
+        description: "The Docker image tag to deploy"
       env_variable_name:
         required: false
         type: string
@@ -35,36 +107,70 @@ jobs:
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd ${{ inputs.target_directory }}
+            # Exit immediately if any command fails
+            set -e
+
+            echo "--- DEPLOYMENT START ---"
+            echo "User: $(whoami)"
+            echo "Requested Directory: ${{ inputs.target_directory }}"
             
-            # 1. Update the .env file with the new tag
-            # Uses sed to find the line starting with the variable and replace its value
-            sed -i "s|^${{ inputs.env_variable_name }}=.*|${{ inputs.env_variable_name }}=${{ inputs.image_tag }}|" .env
+            # 1. Navigate to directory with validation
+            if [ -d "${{ inputs.target_directory }}" ]; then
+              cd "${{ inputs.target_directory }}"
+              echo "Working Directory: $(pwd)"
+            else
+              echo "ERROR: Directory ${{ inputs.target_directory }} not found."
+              exit 1
+            fi
+
+            # 2. Update .env file
+            if [ -f .env ]; then
+              echo "Updating .env: ${{ inputs.env_variable_name }}=${{ inputs.image_tag }}"
+              # Using | as a delimiter in case the tag or name contains slashes
+              sed -i "s|^${{ inputs.env_variable_name }}=.*|${{ inputs.env_variable_name }}=${{ inputs.image_tag }}|" .env
+            else
+              echo "ERROR: .env file missing in $(pwd). Please create it manually once."
+              exit 1
+            fi
             
-            # 2. Pull the new image
+            # 3. Docker Operations
+            echo "Pulling new images..."
             docker compose pull
             
-            # 3. Start the container (re-creates only if changed)
-            docker compose up -d
-            
-            # 4. Healthcheck Wait
-            echo "Waiting for service to be healthy..."
-            # Adjust the timeout (30s) as needed for your app boot time
-            TIMEOUT=30
+            echo "Starting containers..."
+            docker compose up -d --remove-orphans
+
+            # 4. Optimized Healthcheck Wait
+            echo "Waiting for services to become healthy..."
+            TIMEOUT=60
+            INTERVAL=5
             while [ $TIMEOUT -gt 0 ]; do
-              if [ "$(docker compose ps --format json | grep -c '"Health":"healthy"')" -ge 1 ]; then
-                echo "Deployment Healthy!"
+              # Check for containers that are specifically 'healthy'
+              HEALTHY_COUNT=$(docker compose ps --format json | grep -c '"Health":"healthy"' || true)
+              # Also check if any are 'starting' - if none are starting and none are healthy, something is wrong
+              STARTING_COUNT=$(docker compose ps --format json | grep -c '"Health":"starting"' || true)
+              
+              if [ "$HEALTHY_COUNT" -gt 0 ]; then
+                echo "Success: Container is healthy!"
+                docker compose ps
                 exit 0
               fi
-              sleep 2
-              ((TIMEOUT-=2))
+              
+              if [ "$STARTING_COUNT" -eq 0 ] && [ "$HEALTHY_COUNT" -eq 0 ]; then
+                echo "Warning: No containers are in 'starting' or 'healthy' state. Checking logs..."
+                docker compose logs --tail=20
+              fi
+
+              echo "Still waiting... ($TIMEOUT seconds remaining)"
+              sleep $INTERVAL
+              TIMEOUT=$((TIMEOUT - INTERVAL))
             done
             
-            echo "Healthcheck failed or timed out!"
+            echo "ERROR: Healthcheck timed out!"
+            docker compose ps
             exit 1
 
       - name: Notification
         if: always()
         run: |
           echo "Deployment of ${{ inputs.image_tag }} finished with status: ${{ job.status }}"
-          # You can add a Slack/Discord webhook step here
