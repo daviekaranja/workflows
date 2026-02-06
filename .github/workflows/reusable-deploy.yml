@@ -10,7 +10,7 @@
 #       image_tag:
 #         required: true
 #         type: string
-#         description: "The Docker image tag to deploy (e.g. v1.0.1 or latest)"
+#         description: "The Docker image tag to deploy"
 #       env_variable_name:
 #         required: false
 #         type: string
@@ -35,39 +35,73 @@
 #           username: ${{ secrets.VPS_USERNAME }}
 #           key: ${{ secrets.VPS_SSH_KEY }}
 #           script: |
-#             cd ${{ inputs.target_directory }}
+#             # Exit immediately if any command fails
+#             set -e
+
+#             echo "--- DEPLOYMENT START ---"
+#             echo "User: $(whoami)"
+#             echo "Requested Directory: ${{ inputs.target_directory }}"
             
-#             # 1. Update the .env file with the new tag
-#             # Uses sed to find the line starting with the variable and replace its value
-#             sed -i "s|^${{ inputs.env_variable_name }}=.*|${{ inputs.env_variable_name }}=${{ inputs.image_tag }}|" .env
+#             # 1. Navigate to directory with validation
+#             if [ -d "${{ inputs.target_directory }}" ]; then
+#               cd "${{ inputs.target_directory }}"
+#               echo "Working Directory: $(pwd)"
+#             else
+#               echo "ERROR: Directory ${{ inputs.target_directory }} not found."
+#               exit 1
+#             fi
+
+#             # 2. Update .env file
+#             if [ -f .env ]; then
+#               echo "Updating .env: ${{ inputs.env_variable_name }}=${{ inputs.image_tag }}"
+#               # Using | as a delimiter in case the tag or name contains slashes
+#               sed -i "s|^${{ inputs.env_variable_name }}=.*|${{ inputs.env_variable_name }}=${{ inputs.image_tag }}|" .env
+#             else
+#               echo "ERROR: .env file missing in $(pwd). Please create it manually once."
+#               exit 1
+#             fi
             
-#             # 2. Pull the new image
+#             # 3. Docker Operations
+#             echo "Pulling new images..."
 #             docker compose pull
             
-#             # 3. Start the container (re-creates only if changed)
-#             docker compose up -d
-            
-#             # 4. Healthcheck Wait
-#             echo "Waiting for service to be healthy..."
-#             # Adjust the timeout (30s) as needed for your app boot time
-#             TIMEOUT=30
+#             echo "Starting containers..."
+#             docker compose up -d --remove-orphans
+
+#             # 4. Optimized Healthcheck Wait
+#             echo "Waiting for services to become healthy..."
+#             TIMEOUT=60
+#             INTERVAL=5
 #             while [ $TIMEOUT -gt 0 ]; do
-#               if [ "$(docker compose ps --format json | grep -c '"Health":"healthy"')" -ge 1 ]; then
-#                 echo "Deployment Healthy!"
+#               # Check for containers that are specifically 'healthy'
+#               HEALTHY_COUNT=$(docker compose ps --format json | grep -c '"Health":"healthy"' || true)
+#               # Also check if any are 'starting' - if none are starting and none are healthy, something is wrong
+#               STARTING_COUNT=$(docker compose ps --format json | grep -c '"Health":"starting"' || true)
+              
+#               if [ "$HEALTHY_COUNT" -gt 0 ]; then
+#                 echo "Success: Container is healthy!"
+#                 docker compose ps
 #                 exit 0
 #               fi
-#               sleep 2
-#               ((TIMEOUT-=2))
+              
+#               if [ "$STARTING_COUNT" -eq 0 ] && [ "$HEALTHY_COUNT" -eq 0 ]; then
+#                 echo "Warning: No containers are in 'starting' or 'healthy' state. Checking logs..."
+#                 docker compose logs --tail=20
+#               fi
+
+#               echo "Still waiting... ($TIMEOUT seconds remaining)"
+#               sleep $INTERVAL
+#               TIMEOUT=$((TIMEOUT - INTERVAL))
 #             done
             
-#             echo "Healthcheck failed or timed out!"
+#             echo "ERROR: Healthcheck timed out!"
+#             docker compose ps
 #             exit 1
 
 #       - name: Notification
 #         if: always()
 #         run: |
 #           echo "Deployment of ${{ inputs.image_tag }} finished with status: ${{ job.status }}"
-#           # You can add a Slack/Discord webhook step here
 
 
 name: Reusable VPS Deploy
@@ -106,62 +140,81 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          # Pass variables through envs to prevent shell injection/character issues
+          envs: TARGET_DIR_RAW,IMAGE_TAG_RAW,ENV_VAR_RAW
           script: |
-            # Exit immediately if any command fails
             set -e
 
-            echo "--- DEPLOYMENT START ---"
-            echo "User: $(whoami)"
-            echo "Requested Directory: ${{ inputs.target_directory }}"
+            # 1. Sanitize Inputs (Trim whitespace/hidden characters)
+            TARGET_DIR=$(echo "${{ inputs.target_directory }}" | xargs)
+            IMAGE_TAG=$(echo "${{ inputs.image_tag }}" | xargs)
+            ENV_VAR=$(echo "${{ inputs.env_variable_name }}" | xargs)
+
+            echo "--- SANITY CHECK ---"
+            echo "Current User: $(whoami)"
+            echo "Working Dir:  $(pwd)"
+            echo "Target Dir:   $TARGET_DIR"
             
-            # 1. Navigate to directory with validation
-            if [ -d "${{ inputs.target_directory }}" ]; then
-              cd "${{ inputs.target_directory }}"
-              echo "Working Directory: $(pwd)"
+            # 2. Robust Directory Navigation
+            if [ -d "$TARGET_DIR" ]; then
+              cd "$TARGET_DIR"
+              echo "Successfully moved to: $(pwd)"
             else
-              echo "ERROR: Directory ${{ inputs.target_directory }} not found."
+              echo "ERROR: Directory not found: $TARGET_DIR"
+              echo "Listing contents of $(pwd) for debugging:"
+              ls -la
+              echo "Checking if parent directory exists:"
+              ls -d "${TARGET_DIR%/*}" || echo "Parent directory also missing."
               exit 1
             fi
 
-            # 2. Update .env file
-            if [ -f .env ]; then
-              echo "Updating .env: ${{ inputs.env_variable_name }}=${{ inputs.image_tag }}"
-              # Using | as a delimiter in case the tag or name contains slashes
-              sed -i "s|^${{ inputs.env_variable_name }}=.*|${{ inputs.env_variable_name }}=${{ inputs.image_tag }}|" .env
+            # 3. Update .env file (Robust Update/Append)
+            if [ ! -f .env ]; then
+              echo "ERROR: .env file missing in $(pwd). Creating an empty one."
+              touch .env
+            fi
+
+            echo "Updating .env: $ENV_VAR=$IMAGE_TAG"
+            if grep -q "^${ENV_VAR}=" .env; then
+              sed -i "s|^${ENV_VAR}=.*|${ENV_VAR}=${IMAGE_TAG}|" .env
             else
-              echo "ERROR: .env file missing in $(pwd). Please create it manually once."
-              exit 1
+              echo "${ENV_VAR}=${IMAGE_TAG}" >> .env
             fi
             
-            # 3. Docker Operations
-            echo "Pulling new images..."
+            # 4. Docker Operations
+            echo "Pulling images..."
             docker compose pull
             
             echo "Starting containers..."
             docker compose up -d --remove-orphans
 
-            # 4. Optimized Healthcheck Wait
+            # 5. Optimized Healthcheck Wait
             echo "Waiting for services to become healthy..."
             TIMEOUT=60
             INTERVAL=5
             while [ $TIMEOUT -gt 0 ]; do
-              # Check for containers that are specifically 'healthy'
-              HEALTHY_COUNT=$(docker compose ps --format json | grep -c '"Health":"healthy"' || true)
-              # Also check if any are 'starting' - if none are starting and none are healthy, something is wrong
-              STARTING_COUNT=$(docker compose ps --format json | grep -c '"Health":"starting"' || true)
+              # Get status in JSON for reliable parsing
+              STATUS=$(docker compose ps --format json)
               
-              if [ "$HEALTHY_COUNT" -gt 0 ]; then
-                echo "Success: Container is healthy!"
+              # Count how many have healthchecks and are healthy
+              # Note: Some containers might not have healthchecks defined
+              HEALTHY_COUNT=$(echo "$STATUS" | grep -c '"Health":"healthy"' || true)
+              STARTING_COUNT=$(echo "$STATUS" | grep -c '"Health":"starting"' || true)
+              UNHEALTHY_COUNT=$(echo "$STATUS" | grep -c '"Health":"unhealthy"' || true)
+              
+              if [ "$UNHEALTHY_COUNT" -gt 0 ]; then
+                echo "FAIL: One or more containers are UNHEALTHY."
+                docker compose logs --tail=20
+                exit 1
+              fi
+
+              if [ "$HEALTHY_COUNT" -gt 0 ] && [ "$STARTING_COUNT" -eq 0 ]; then
+                echo "Success: Services are healthy and stable!"
                 docker compose ps
                 exit 0
               fi
               
-              if [ "$STARTING_COUNT" -eq 0 ] && [ "$HEALTHY_COUNT" -eq 0 ]; then
-                echo "Warning: No containers are in 'starting' or 'healthy' state. Checking logs..."
-                docker compose logs --tail=20
-              fi
-
-              echo "Still waiting... ($TIMEOUT seconds remaining)"
+              echo "Waiting... ($TIMEOUTs left). Healthy: $HEALTHY_COUNT, Starting: $STARTING_COUNT"
               sleep $INTERVAL
               TIMEOUT=$((TIMEOUT - INTERVAL))
             done
@@ -173,4 +226,4 @@ jobs:
       - name: Notification
         if: always()
         run: |
-          echo "Deployment of ${{ inputs.image_tag }} finished with status: ${{ job.status }}"
+          echo "Deployment finished with status: ${{ job.status }}"
