@@ -103,7 +103,6 @@
 #         run: |
 #           echo "Deployment of ${{ inputs.image_tag }} finished with status: ${{ job.status }}"
 
-
 name: Reusable VPS Deploy
 
 on:
