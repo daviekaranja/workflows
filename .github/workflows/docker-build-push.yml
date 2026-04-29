@@ -36,8 +36,8 @@
 #         with:
 #           images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}
 #           tags: |
-#             # 1. Tag on semantic version (v1.0.0) from git tags
-#             type=semver,pattern={{version}}
+#             # 1. Use the RAW git tag (keeps the "v" prefix if present)
+#             type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
 
 #             # 2. Tag 'latest' ONLY on the default branch (master)
 #             type=raw,value=latest,enable={{is_default_branch}}
@@ -65,9 +65,9 @@
 #           push: true
 #           tags: ${{ steps.meta.outputs.tags }}
 #           labels: ${{ steps.meta.outputs.labels }}
-#           # Optimized GitHub Actions caching
 #           cache-from: type=gha
 #           cache-to: type=gha,mode=max
+
 
 
 name: Reusable Docker Build
@@ -78,17 +78,14 @@ on:
       image_name:
         required: true
         type: string
-        description: "The name of the image to push to Docker Hub"
       build_context:
         required: false
         type: string
         default: "."
-        description: "The directory to use as the Docker build context"
       dockerfile_path:
         required: false
         type: string
         default: "./Dockerfile"
-        description: "The path to the Dockerfile relative to the repo root"
     secrets:
       DOCKERHUB_USERNAME:
         required: true
@@ -98,9 +95,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Extract Docker metadata
         id: meta
@@ -108,13 +109,8 @@ jobs:
         with:
           images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ inputs.image_name }}
           tags: |
-            # 1. Use the RAW git tag (keeps the "v" prefix if present)
             type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/') }}
-
-            # 2. Tag 'latest' ONLY on the default branch (master)
             type=raw,value=latest,enable={{is_default_branch}}
-
-            # 3. Tag with branch name (e.g. 'dev') ONLY on non-default branches
             type=ref,event=branch,enable={{is_not_default_branch}}
 
       - name: Set up QEMU
@@ -122,6 +118,8 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          install: true  # 🔥 ensures docker build uses buildx
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -129,13 +127,23 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push (multi-platform)
         uses: docker/build-push-action@v5
         with:
           context: ${{ inputs.build_context }}
           file: ${{ inputs.dockerfile_path }}
+
           push: true
+
+          # 🔥 Multi-arch target
+          platforms: linux/amd64,linux/arm64
+
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+          # 🔥 Better caching
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+          # 🔥 Optional but useful
+          provenance: false  # avoids attestation issues on some registries
