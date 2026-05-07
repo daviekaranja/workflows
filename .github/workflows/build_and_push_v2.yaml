@@ -14,6 +14,12 @@ on:
         default: "docker.io"
         description: "Registry to push to (docker.io or ghcr.io)"
 
+      context:
+        required: false
+        type: string
+        default: "."
+        description: "Build context (e.g. '.', 'backend', 'frontend')"
+
       push:
         required: false
         type: boolean
@@ -81,7 +87,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ inputs.context }}          # ← Updated
           push: ${{ inputs.push }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
