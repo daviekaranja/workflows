@@ -1,69 +1,105 @@
-# 🐳 Reusable Docker Build Workflow
-
-A professional-grade, reusable GitHub Action for building and pushing Docker images to Docker Hub. Designed for Python/FastAPI projects, monorepos, and multi-environment tagging strategies.
-
-## 🚀 Features
-
-- **Smart Tagging**: Automatically handles `latest`, Semantic Versioning (`v1.0.0`), and branch-based tags (`dev`, `feature-x`).
-- **Monorepo Support**: Configurable build context and Dockerfile paths.
-- **Performance**: Implements GitHub Actions (GHA) caching to speed up builds by up to 80%.
-- **Multi-Platform Ready**: Includes QEMU setup for cross-platform image compatibility.
-
-## 📋 Prerequisites
-
-- **Secrets**: You must define `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` in your repository or organization secrets.
-- **Repo Access**: Ensure your workflows repository is public or shared within your GitHub Organization.
-
-## 🛠 Usage Example
-
-Create a file at `.github/workflows/deploy.yml` in your application repository:
-
-```yaml
-name: CI/CD Pipeline
-
-on:
-  push:
-    branches: [main, dev]
-    tags: ['v*']
-
-jobs:
-  docker-build:
-    uses: <your-username>/workflows/.github/workflows/docker-build-push.yml@main
-    with:
-      image_name: "fastapi-service"
-      build_context: "."           # Default
-      dockerfile_path: "Dockerfile" # Default
-    secrets: inherit
-```
-
-## 📂 Inputs & Secrets
-
-### Inputs
-
-| Input           | Required | Default      | Description                        |
-| --------------- | -------- | ------------ | ---------------------------------- |
-| `image_name`    | Yes      | N/A          | The name for the Docker Hub image. |
-| `build_context` | No       | `.`          | Folder scope for the Docker build. |
-| `dockerfile_path` | No       | `./Dockerfile` | Path to the Dockerfile.            |
-
-### Secrets
-
-| Secret             | Required | Description                                  |
-| ------------------ | -------- | -------------------------------------------- |
-| `DOCKERHUB_USERNAME` | Yes      | Your Docker Hub ID.                          |
-| `DOCKERHUB_TOKEN`    | Yes      | A Personal Access Token (PAT) from Docker Hub. |
-
-## 🏷 Tagging Logic
-
-- **Push to `main` branch**: Pushes `image:latest`.
-- **Push a Tag (`v1.2.3`)**: Pushes `image:1.2.3`.
-- **Push to `dev` branch**: Pushes `image:dev`.
-- **Push to any other branch**: Pushes `image:<branch-name>`.
-
-## ✅ Implementation Checklist
-
-- **Docker Hub PAT**: Don't use your Docker Hub password; generate a Token in Docker Hub Account Settings for better security.
+**Here's the updated and improved documentation** that matches our current reusable workflow:
 
 ---
 
- > Thanks for using this reusable workflow! If you have any questions or need further assistance, feel free to open an issue or contribute to the repository. Happy coding! 🚀
+# 🐳 Reusable Docker Build & Push Workflow
+
+A clean, flexible, and production-ready reusable GitHub Actions workflow for building and pushing Docker images. Supports **Docker Hub**, **GHCR**, monorepos, and multi-platform builds.
+
+## 🚀 Features
+
+- **Multi-Registry Support**: Docker Hub + GitHub Container Registry (GHCR)
+- **Monorepo Friendly**: Configurable build context
+- **Smart Tagging**: `latest`, semantic versioning, branch names, PRs
+- **Multi-Platform**: `linux/amd64` + `linux/arm64` out of the box
+- **Fast Builds**: GitHub Actions cache enabled
+- **Secure**: Proper secret handling and minimal permissions
+
+## 🛠 Usage Example
+
+Create a file in your project (e.g. `POS-MVP`):
+
+**`.github/workflows/backend-docker.yml`**
+
+```yaml
+name: Build & Push Backend
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+    paths: [ 'backend/**' ]
+  pull_request:
+    paths: [ 'backend/**' ]
+
+jobs:
+  build-and-push:
+    uses: daviekaranja/workflows/.github/workflows/build_and_push_v2.yaml@main
+    with:
+      image_name: pos-mvp-backend
+      registry: ghcr.io                    # or docker.io
+      context: backend                     # Important for monorepos
+      push: ${{ github.event_name != 'pull_request' }}
+      platforms: "linux/amd64,linux/arm64"
+    secrets: inherit
+```
+
+---
+
+## 📂 Inputs
+
+| Input            | Required | Default              | Description |
+|------------------|----------|----------------------|-----------|
+| `image_name`     | Yes      | -                    | Name of the image (without registry) |
+| `registry`       | No       | `docker.io`          | `docker.io` or `ghcr.io` |
+| `context`        | No       | `.`                  | Build context path (e.g. `backend`, `frontend`) |
+| `push`           | No       | `true`               | Set to `false` for PRs (build only) |
+| `platforms`      | No       | `linux/amd64,linux/arm64` | Target platforms |
+| `tags`           | No       | `""`                 | Additional custom tags |
+
+---
+
+## 🔑 Secrets
+
+- **For GHCR** → Use `secrets: inherit` (uses `GITHUB_TOKEN` automatically)
+- **For Docker Hub** → Pass these secrets:
+
+```yaml
+    secrets:
+      docker_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      docker_password: ${{ secrets.DOCKERHUB_TOKEN }}
+```
+
+---
+
+## 🏷 Tagging Strategy
+
+The workflow automatically creates these tags:
+
+- `latest` → when pushing to default branch (`main`/`master`)
+- `v1.2.3` → when pushing git tags
+- Branch name → e.g. `feature-new-ui`, `dev`
+- PR number → for pull requests
+
+---
+
+## 📋 Prerequisites
+
+1. Your `workflows` repository should be public (or the calling repo must have access).
+2. For GHCR: No extra secrets needed.
+3. For Docker Hub: Create a Personal Access Token with **Write** permission.
+
+---
+
+## ✅ Implementation Checklist
+
+- [ ] Update reusable workflow with latest version
+- [ ] Create calling workflow in target repo
+- [ ] Test with a PR first (`push: false`)
+- [ ] Verify image appears in GHCR or Docker Hub
+
+---
+
+> **Repository**: [daviekaranja/workflows](https://github.com/daviekaranja/workflows)
+
+---
